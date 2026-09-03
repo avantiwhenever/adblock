@@ -1,0 +1,53 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <title>Ghost Block</title>
+  <link rel="stylesheet" href="popup.css" />
+</head>
+<body>
+  <header>
+    <div class="brand">
+      <span class="dot" id="status-dot"></span>
+      <span class="name">Ghost Block</span>
+    </div>
+    <label class="switch" title="Enabled everywhere">
+      <input type="checkbox" id="master-toggle" />
+      <span class="slider"></span>
+    </label>
+  </header>
+
+  <section class="count-card">
+    <div class="count" id="count">0</div>
+    <div class="count-label">requests blocked on this page<br /><span class="muted">(approximate)</span></div>
+  </section>
+
+  <section class="site-row">
+    <div class="site-info">
+      <div class="site-label">This site</div>
+      <div class="site-host" id="site-host">—</div>
+    </div>
+    <button id="site-toggle" class="site-toggle-btn">Pause</button>
+  </section>
+
+  <section class="protections">
+    <div class="protections-title">Active protections</div>
+    <label class="protection-row">
+      <span>Ad &amp; tracker blocking</span>
+      <input type="checkbox" id="proto-blocking" />
+    </label>
+    <label class="protection-row">
+      <span>Anti-adblock-wall defeat</span>
+      <input type="checkbox" id="proto-annoyances" />
+    </label>
+    <label class="protection-row">
+      <span>Fingerprint hardening</span>
+      <input type="checkbox" id="proto-fingerprint" />
+    </label>
+  </section>
+
+  <footer>No usage data is collected or sent anywhere by this extension.</footer>
+
+  <script src="popup.js"></script>
+</body>
+</html>
