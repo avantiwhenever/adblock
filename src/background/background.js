@@ -224,8 +224,21 @@ async function syncAntidetectScript() {
 // dynamic rules, both MAIN-world script registrations) from current
 // settings. Cheap enough to just always run all of them rather than
 // figuring out which specific one a given settings change actually affects.
+//
+// Every call site below invokes this "bare" (no await, no .catch()) — it's
+// triggered from event listeners (onInstalled, onStartup, storage changes)
+// that don't themselves await it — so it must never let a rejection
+// escape, or Chrome logs it as an unhandled promise rejection in the
+// service worker's console with no useful context. The try/catch here is
+// what makes every one of those bare call sites safe.
 async function applyAll() {
-  await Promise.all([syncRulesets(), syncDynamicRules(), syncGuardScript(), syncAntidetectScript()]);
+  try {
+    await Promise.all([syncRulesets(), syncDynamicRules(), syncGuardScript(), syncAntidetectScript()]);
+  } catch {
+    // A transient Chrome API failure here (e.g. mid-restart) just means
+    // this particular sync attempt was skipped — the next settings change
+    // or browser restart calls applyAll() again and it self-corrects.
+  }
 }
 
 // Fires once when the extension is first installed, and again on every
@@ -257,20 +270,30 @@ chrome.storage.onChanged.addListener((changes, area) => {
 // get cosmetic.js/detect.js until it navigates or reloads on its own — so
 // on install/update we walk every currently-open http(s) tab and inject
 // them manually, once, so protection is active immediately everywhere.
+//
+// Called bare (no await/.catch()) from onInstalled above, so — same
+// reasoning as applyAll() — this must never let a rejection escape.
 async function reinjectIntoOpenTabs() {
-  const tabs = await chrome.tabs.query({ url: ["http://*/*", "https://*/*"] });
-  for (const tab of tabs) {
-    if (tab.id === undefined) continue;
-    // .catch(() => {}) because this can legitimately fail for tabs Chrome
-    // won't let extensions inject into (chrome://, the Web Store, etc.) —
-    // those are filtered out by the http(s)-only query above in the common
-    // case, but a failed injection here isn't worth surfacing as an error.
-    chrome.scripting
-      .executeScript({ target: { tabId: tab.id, allFrames: true }, files: ["src/content/cosmetic.js"] })
-      .catch(() => {});
-    chrome.scripting
-      .executeScript({ target: { tabId: tab.id }, files: ["src/content/detect.js"] })
-      .catch(() => {});
+  try {
+    const tabs = await chrome.tabs.query({ url: ["http://*/*", "https://*/*"] });
+    for (const tab of tabs) {
+      if (tab.id === undefined) continue;
+      // .catch(() => {}) because this can legitimately fail for tabs
+      // Chrome won't let extensions inject into (chrome://, the Web
+      // Store, etc.) — those are filtered out by the http(s)-only query
+      // above in the common case, but a failed injection here isn't worth
+      // surfacing as an error.
+      chrome.scripting
+        .executeScript({ target: { tabId: tab.id, allFrames: true }, files: ["src/content/cosmetic.js"] })
+        .catch(() => {});
+      chrome.scripting
+        .executeScript({ target: { tabId: tab.id }, files: ["src/content/detect.js"] })
+        .catch(() => {});
+    }
+  } catch {
+    // chrome.tabs.query itself failing is rare and not worth surfacing —
+    // tabs that miss out on this one-time reinjection still get protection
+    // normally on their next navigation.
   }
 }
 
@@ -304,7 +327,19 @@ function getBlockedDomainSet() {
   if (!blockedDomainSetPromise) {
     blockedDomainSetPromise = fetch(chrome.runtime.getURL("rules/blocked-domains.json"))
       .then((r) => r.json())
-      .then((list) => new Set(list));
+      .then((list) => new Set(list))
+      .catch(() => {
+        // A failed fetch here (extremely rare — this is a bundled file,
+        // not a network request) would otherwise become an unhandled
+        // rejection the first time this promise is awaited, and would
+        // permanently wedge the badge counter for the rest of this service
+        // worker's lifetime since the failed promise stays cached. Reset
+        // the cache so the *next* call gets a fresh attempt instead, and
+        // fall back to an empty set for this one — worst case, this
+        // particular request just doesn't get counted.
+        blockedDomainSetPromise = null;
+        return new Set();
+      });
   }
   return blockedDomainSetPromise;
 }
@@ -345,44 +380,54 @@ chrome.action.setBadgeBackgroundColor({ color: "#5b5bd6" });
 // regular extensions anyway; only declarativeNetRequest can actually block
 // in MV3). This listener exists solely to drive the approximate badge
 // count described above.
+//
+// Split into its own named function (rather than an inline listener body)
+// so it can be wrapped in a try/catch below — this fires on essentially
+// every network request the browser makes, so it's the highest-frequency
+// async callback in this file, and the one most worth making sure can
+// never produce an unhandled promise rejection.
+async function handleRequestForBadge(details) {
+  // tabId is -1 for requests not associated with any tab (e.g. the
+  // browser's own background fetches) — nothing to badge for those.
+  if (details.tabId < 0) return;
+
+  if (details.type === "main_frame") {
+    // A new top-level navigation starting in this tab — reset the count
+    // to 0 so it reflects "this page", not a running total across every
+    // page the tab has ever visited.
+    await bumpCount(details.tabId, 0, true);
+    return;
+  }
+
+  let hostname;
+  try {
+    hostname = new URL(details.url).hostname;
+  } catch {
+    return; // malformed/non-standard URL, nothing sensible to check
+  }
+
+  const domainSet = await getBlockedDomainSet();
+  if (isBlockedHostname(hostname, domainSet)) {
+    const { enabled, blockingEnabled, whitelist } = await getSettings();
+    if (!enabled || !blockingEnabled) return; // blocking is off; nothing was actually blocked
+
+    // Even though this specific request's *own* domain is on the blocked
+    // list, if the *page* it's loading into is paused (whitelisted), the
+    // dynamic allow-rule in syncDynamicRules means declarativeNetRequest
+    // actually let it through — so don't count it as blocked.
+    const tab = await chrome.tabs.get(details.tabId).catch(() => null);
+    if (tab?.url) {
+      const tabHost = new URL(tab.url).hostname;
+      if (whitelist.includes(tabHost)) return;
+    }
+
+    await bumpCount(details.tabId, 1);
+  }
+}
+
 chrome.webRequest.onBeforeRequest.addListener(
-  async (details) => {
-    // tabId is -1 for requests not associated with any tab (e.g. the
-    // browser's own background fetches) — nothing to badge for those.
-    if (details.tabId < 0) return;
-
-    if (details.type === "main_frame") {
-      // A new top-level navigation starting in this tab — reset the count
-      // to 0 so it reflects "this page", not a running total across every
-      // page the tab has ever visited.
-      await bumpCount(details.tabId, 0, true);
-      return;
-    }
-
-    let hostname;
-    try {
-      hostname = new URL(details.url).hostname;
-    } catch {
-      return; // malformed/non-standard URL, nothing sensible to check
-    }
-
-    const domainSet = await getBlockedDomainSet();
-    if (isBlockedHostname(hostname, domainSet)) {
-      const { enabled, blockingEnabled, whitelist } = await getSettings();
-      if (!enabled || !blockingEnabled) return; // blocking is off; nothing was actually blocked
-
-      // Even though this specific request's *own* domain is on the blocked
-      // list, if the *page* it's loading into is paused (whitelisted), the
-      // dynamic allow-rule in syncDynamicRules means declarativeNetRequest
-      // actually let it through — so don't count it as blocked.
-      const tab = await chrome.tabs.get(details.tabId).catch(() => null);
-      if (tab?.url) {
-        const tabHost = new URL(tab.url).hostname;
-        if (whitelist.includes(tabHost)) return;
-      }
-
-      await bumpCount(details.tabId, 1);
-    }
+  (details) => {
+    handleRequestForBadge(details).catch(() => {});
   },
   { urls: ["<all_urls>"] }
 );
@@ -391,7 +436,7 @@ chrome.webRequest.onBeforeRequest.addListener(
 // again, and leaving it around would slowly leak session-storage entries
 // for every tab you've ever opened.
 chrome.tabs.onRemoved.addListener((tabId) => {
-  chrome.storage.session.remove(`count_${tabId}`);
+  chrome.storage.session.remove(`count_${tabId}`).catch(() => {});
 });
 
 // ============================================================================

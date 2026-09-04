@@ -140,12 +140,12 @@ function candidateRow(candidate) {
   approveBtn.className = "approve";
   approveBtn.title = "Block this domain";
   approveBtn.textContent = "✓";
-  approveBtn.addEventListener("click", () => approveCandidate(candidate));
+  approveBtn.addEventListener("click", () => approveCandidate(candidate).catch(() => {}));
   const ignoreBtn = document.createElement("button");
   ignoreBtn.className = "ignore";
   ignoreBtn.title = "Not an ad, ignore";
   ignoreBtn.textContent = "✕";
-  ignoreBtn.addEventListener("click", () => ignoreCandidate(candidate.domain));
+  ignoreBtn.addEventListener("click", () => ignoreCandidate(candidate.domain).catch(() => {}));
   actions.append(approveBtn, ignoreBtn);
 
   row.append(info, actions);
@@ -205,6 +205,25 @@ async function ignoreCandidate(domain) {
   });
 }
 
+// The Pause/Resume button toggles this exact hostname's membership in the
+// whitelist array, then reloads the tab so the change (blocking on/off,
+// cosmetic hiding on/off, fingerprint guard registered/not) takes effect
+// immediately rather than only on the *next* navigation.
+async function pauseOrResumeSite() {
+  if (!currentHostname) return;
+  const settings = await getSettings();
+  const isPaused = settings.whitelist.includes(currentHostname);
+  const whitelist = isPaused
+    ? settings.whitelist.filter((h) => h !== currentHostname)
+    : [...settings.whitelist, currentHostname];
+  await chrome.storage.local.set({ whitelist });
+  // Render immediately with the new value rather than waiting for the
+  // storage.onChanged round-trip, so the button's label/state flips the
+  // instant you click it.
+  render({ ...settings, whitelist });
+  if (currentTab?.id !== undefined) chrome.tabs.reload(currentTab.id);
+}
+
 async function init() {
   // The popup always opens scoped to whichever tab was active when you
   // clicked the toolbar icon.
@@ -229,43 +248,34 @@ async function init() {
   // *means* — background.js's storage.onChanged listener does that, by
   // recomputing the full runtime configuration from scratch (see that
   // file's applyAll).
+  //
+  // Every write below is fire-and-forget (no await — the checkbox should
+  // feel instant, not wait on a round-trip) with a .catch(() => {}): the
+  // popup can close mid-write the moment you click a checkbox and move
+  // your mouse away, which is completely normal and not worth surfacing
+  // as an unhandled promise rejection in the console.
   els.masterToggle.addEventListener("change", () => {
-    chrome.storage.local.set({ enabled: els.masterToggle.checked });
+    chrome.storage.local.set({ enabled: els.masterToggle.checked }).catch(() => {});
   });
 
   els.protoBlocking.addEventListener("change", () => {
-    chrome.storage.local.set({ blockingEnabled: els.protoBlocking.checked });
+    chrome.storage.local.set({ blockingEnabled: els.protoBlocking.checked }).catch(() => {});
   });
   els.protoAnnoyances.addEventListener("change", () => {
-    chrome.storage.local.set({ annoyancesEnabled: els.protoAnnoyances.checked });
+    chrome.storage.local.set({ annoyancesEnabled: els.protoAnnoyances.checked }).catch(() => {});
   });
   els.protoConsent.addEventListener("change", () => {
-    chrome.storage.local.set({ consentEnabled: els.protoConsent.checked });
+    chrome.storage.local.set({ consentEnabled: els.protoConsent.checked }).catch(() => {});
   });
   els.protoFingerprint.addEventListener("change", () => {
-    chrome.storage.local.set({ fingerprintGuard: els.protoFingerprint.checked });
+    chrome.storage.local.set({ fingerprintGuard: els.protoFingerprint.checked }).catch(() => {});
   });
   els.protoLearn.addEventListener("change", () => {
-    chrome.storage.local.set({ learnCandidates: els.protoLearn.checked });
+    chrome.storage.local.set({ learnCandidates: els.protoLearn.checked }).catch(() => {});
   });
 
-  // The Pause/Resume button toggles this exact hostname's membership in
-  // the whitelist array, then reloads the tab so the change (blocking
-  // on/off, cosmetic hiding on/off, fingerprint guard registered/not) takes
-  // effect immediately rather than only on the *next* navigation.
-  els.siteToggle.addEventListener("click", async () => {
-    if (!currentHostname) return;
-    const settings = await getSettings();
-    const isPaused = settings.whitelist.includes(currentHostname);
-    const whitelist = isPaused
-      ? settings.whitelist.filter((h) => h !== currentHostname)
-      : [...settings.whitelist, currentHostname];
-    await chrome.storage.local.set({ whitelist });
-    // Render immediately with the new value rather than waiting for the
-    // storage.onChanged round-trip below, so the button's label/state
-    // flips the instant you click it.
-    render({ ...settings, whitelist });
-    if (currentTab?.id !== undefined) chrome.tabs.reload(currentTab.id);
+  els.siteToggle.addEventListener("click", () => {
+    pauseOrResumeSite().catch(() => {});
   });
 }
 
@@ -275,7 +285,7 @@ async function init() {
 // (more commonly) right after init()'s own writes echo back through
 // storage.
 chrome.storage.onChanged.addListener((changes, area) => {
-  if (area === "local") refresh();
+  if (area === "local") refresh().catch(() => {});
 });
 
-init();
+init().catch(() => {});
