@@ -4,194 +4,77 @@
 ![Manifest V3](https://img.shields.io/badge/Manifest-V3-informational)
 ![Zero npm dependencies](https://img.shields.io/badge/dependencies-zero-brightgreen)
 
-A Manifest V3 Chrome extension that blocks ads and trackers, fights back
-against anti-adblock walls, and makes itself and your browser harder for
-sites to fingerprint. No telemetry, no phone-home, no account, zero npm
-dependencies.
+**A free Chrome extension that blocks ads and trackers — and doesn't let sites know it's there.**
+
+Most ad blockers get spotted. Sites run scripts that check whether their ads
+loaded, and if they didn't, you get a "please disable your ad blocker"
+message. Ghost Block blocks those detector scripts too, and takes extra
+steps to keep your browser from being fingerprinted (tracked by its unique
+characteristics) by the sites you visit.
+
+No account, no settings synced to a server, nothing tracked about you or
+sent anywhere — everything it does stays on your own computer.
+
+Free and open source, for anyone to read, use, or improve.
 
 ## What it does
 
-- **Ad & tracker blocking** — network-level blocking via
-  `declarativeNetRequest`, compiled from EasyList and EasyPrivacy (~26,000
-  rules, the most reliable/general ones prioritized to fit Chrome's
-  guaranteed static-rule budget). Plus cosmetic CSS hiding for ~13,600
-  generic ad-container selectors and ~8,000 site-specific ones.
-- **Anti-adblock-wall defeat** — blocks the scripts sites use to detect an
-  adblocker and nag/paywall you, sourced from the
-  [anti-adblock-killer](https://github.com/reek/anti-adblock-killer) list.
-- **Fingerprint hardening** — adds noise to canvas/WebGL/AudioContext reads
-  and rounds off `hardwareConcurrency`/`deviceMemory`, so those signals
-  can't be used to uniquely identify your browser. This is best-effort
-  JS-level noise, not engine-level resistance like Brave/Tor Browser — see
-  *Limitations* below.
-- **Learns new ads locally (beta)** — a heuristic scanner flags likely-ad
-  iframes/images that the filter lists missed (third-party origin, IAB
-  standard ad dimensions, or `ad-`/`sponsor`-style container classes on a
-  word boundary) and lists them in the popup for you to approve or ignore.
-  Nothing blocks automatically — see *Local ad-learning* below.
-- **Hides itself from page JS** — no `web_accessible_resources`, the
-  fingerprint guard is injected via `chrome.scripting.registerContentScripts`
-  (not a `<script src="chrome-extension://...">` tag, which would leak the
-  extension's ID into the page's DOM), and patched native functions disguise
-  themselves under `Function.prototype.toString` so a site checking "is this
-  really native code" doesn't learn an extension is present.
-- **No telemetry** — nothing here calls home. Ever.
+- 🚫 **Blocks ads and trackers** on every site you visit
+- 🛡️ **Gets past "please disable your ad blocker" walls** — many sites try
+  to detect ad blockers and guilt or block you into turning them off; this
+  fights back
+- 🍪 **Blocks cookie/tracking-consent pop-ups** — the "we value your
+  privacy, accept all cookies?" banners that clutter nearly every site
+- 🕵️ **Makes your browser harder to track** by the subtle technical details
+  sites use to fingerprint visitors, even ones who block ads
+- 🧠 **Learns as you browse** — flags new ads it doesn't recognize yet and
+  lets you approve or dismiss them with one click, right from the popup
+- 👻 **Doesn't advertise its own presence** — nothing about how it works
+  gives away to a website that it's installed
+- 🔒 **Collects nothing** — no accounts, no analytics, no data leaving your
+  computer, ever
 
 ## Installing it
 
-Official (non-Chromium) Google Chrome builds no longer honor the
-`--load-extension` command-line flag, so this has to go through the UI:
+1. Download this repository (green **Code** button above → **Download ZIP**,
+   then unzip it — or `git clone` it if you're comfortable with git)
+2. Open Chrome and go to `chrome://extensions`
+3. Turn on **Developer mode** (top-right toggle)
+4. Click **Load unpacked**, and select the unzipped/cloned folder
+5. Pin it from the puzzle-piece icon in Chrome's toolbar so it's always visible
 
-1. Open `chrome://extensions`
-2. Turn on **Developer mode** (top right toggle)
-3. Click **Load unpacked**, and select this repo's folder
-4. Pin it from the puzzle-piece icon in Chrome's toolbar so it's visible
+That's it — it's now protecting every site you visit.
 
-Tabs that were already open at install time get protection injected
-automatically once; tabs opened after that are covered as they load
-normally. If you ever see a red "Errors" badge on the extension's card in
-`chrome://extensions`, click it — that'll show the exact failure.
+## Using it
 
-## How to use it
+Click the Ghost Block icon in your toolbar to open its popup:
 
-Click the Ghost Block icon to open the popup.
+- The switch at the top turns everything on/off
+- **Pause** turns protection off just for the site you're currently on —
+  use this first if a page looks broken. **Paused sites** lists every site
+  you've paused, in one place, with a button to resume each one
+- Below that are five separate switches, one per protection listed above,
+  so you can turn any of them off individually if you want
+- **New ads found on this device** shows ads it spotted that weren't
+  already on its list — click ✓ to block one, or ✕ to ignore it
 
-| Control | What it does |
-|---|---|
-| Top-right switch | Master on/off for everything, on every site |
-| Blocked count | Approximate ads/trackers blocked on the current page (see *Limitations*) |
-| **Pause** / **Resume** on "This site" | Turns off *all* protection (blocking, cosmetic hiding, fingerprint guard) for the current site only, and reloads the page. Use this first if a site looks broken. |
-| Ad & tracker blocking | Toggles the EasyList/EasyPrivacy network + cosmetic rules |
-| Anti-adblock-wall defeat | Toggles the anti-adblock-killer rules |
-| Fingerprint hardening | Toggles the canvas/WebGL/audio noise and hardware-info rounding |
-| Learn new ads (beta) | Toggles the local heuristic scanner described below |
+## Something looks broken?
 
-**If a site breaks after installing:** open the popup on that site and hit
-**Pause**. That's a per-site allowlist — it doesn't touch any other site,
-and you can **Resume** protection there any time from the same button.
+Open the popup on that site and hit **Pause**. If that doesn't fix it, or
+if you want to report an ad/tracker that got through, please
+[open an issue](../../issues) — real reports are what make this better.
 
-### Local ad-learning (review queue)
+## Want the technical details?
 
-With "Learn new ads" on, a content script watches each page for likely ads
-that the static filter lists didn't catch — a third-party iframe/image at a
-standard ad size (300×250, 728×90, etc.) or sitting in a container whose
-class/id contains a whole word like `ad`, `sponsor`, or `advert`. Matches
-are **not** blocked automatically. They show up in the popup under "New ads
-found on this device" with two buttons:
+Everything about how it actually works under the hood — the architecture,
+what each file does, how the filter lists are compiled, known limitations,
+and the security model — is in **[docs/TECHNICAL.md](docs/TECHNICAL.md)**.
 
-- **✓ (approve)** — adds a personal block rule for that domain (and hides
-  its container via CSS), effective immediately, on every site, from then on.
-- **✕ (ignore)** — dismisses it permanently; it won't be suggested again.
+## License
 
-Everything here — candidates, approvals, dismissals — lives in
-`chrome.storage.local` on your machine only. Nothing is uploaded, and the
-list isn't shared back into this repo's `rules/*.json` automatically (see
-*Rebuilding the filter lists* if you want to fold something you've learned
-back into the shipped rules yourself).
+Ghost Block's own code is [GPL-3.0](LICENSE) licensed — free to use, study,
+modify, and share. The compiled ad/tracker lists it ships with come from
+third-party sources that keep their own licenses; see
+[docs/TECHNICAL.md](docs/TECHNICAL.md#license--attribution) for details.
 
-Heuristic detection has false positives. If something you didn't expect
-gets hidden, disable "Learn new ads" or use the site Pause button, and
-please open an issue with the domain/site so the heuristic can be tightened.
-
-## Rebuilding the filter lists
-
-The compiled rules in `rules/*.json` are checked in, but you can regenerate
-them from fresh upstream lists at any time:
-
-```
-node build/convert.mjs
-```
-
-This re-downloads `build/cache/{easylist,easyprivacy,anti-adblock-killer}.txt`
-if missing, and rewrites everything in `rules/`. Run it periodically to pick
-up upstream list updates — there's no auto-update mechanism (an extension
-that fetches rule updates from a remote server on its own would itself be
-a tracking-adjacent behavior we're deliberately avoiding).
-
-## Architecture
-
-```
-manifest.json                   MV3 manifest
-src/background/background.js    settings, ruleset sync, guard-script
-                                 registration, ad-learning review queue,
-                                 approximate badge counter
-src/content/cosmetic.js         ISOLATED world — hides ad containers via CSS
-src/content/detect.js           ISOLATED world — heuristic ad-candidate scanner
-src/content/guard.js            MAIN world — fingerprint noise (registered
-                                 dynamically, never in manifest.json, so it
-                                 can be excluded per whitelisted site)
-src/popup/                      toggle UI + ad-learning review queue
-rules/*.dnr.json                declarativeNetRequest static rulesets
-rules/cosmetic-*.json           CSS selectors for cosmetic.js
-rules/blocked-domains.json      flat domain list, badge-count heuristic only
-build/convert.mjs               EasyList-syntax → DNR/cosmetic converter
-build/make-icons.py             generates icons/*.png
-```
-
-## Limitations (read before relying on this)
-
-- **Blocked-count badge is approximate.** Chrome doesn't expose a
-  production-safe "this exact request was blocked by rule X" event
-  (`onRuleMatchedDebug` only works for unpacked extensions in dev mode, and
-  even then only while DevTools-adjacent tooling is watching). The badge
-  instead checks each request's hostname against the same domain list the
-  DNR rules were built from — a close proxy, not a direct readout.
-- **The ad-learning heuristics will misfire sometimes.** Third-party iframes
-  at common sizes, or containers with ad-adjacent class names, aren't always
-  ads (embedded video players, widgets, etc.). That's exactly why approval
-  is manual rather than automatic — see *Local ad-learning* above.
-- **Cosmetic unhide exceptions (`#@#`) aren't applied.** A small number of
-  EasyList entries say "don't hide this selector on this specific site" to
-  fix over-hiding; those are currently ignored, so on rare pages a real
-  element could be hidden that shouldn't be. Low-frequency in practice.
-- **Regex filters, scriptlet injections, and `$csp`/`$redirect`/`$removeparam`
-  rules are skipped**, not translated — mistranslating any of these could
-  silently break a site or under-block, so they're dropped rather than
-  guessed at. This trims some coverage versus a full uBlock-style engine.
-- **Static rules are capped at ~27,000** (16k EasyList + 10k EasyPrivacy +
-  1.1k anti-adblock) to stay safely inside Chrome's *guaranteed* 30,000
-  static-rule budget per extension, regardless of what else is installed.
-  The simplest, most reliable domain-block rules are prioritized when
-  truncating, so the coverage loss is concentrated in narrow path-specific
-  rules rather than whole-domain blocks.
-- **Fingerprint hardening is JS-level, not engine-level.** A sufficiently
-  determined fingerprinting script combining many weak signals can still
-  narrow things down. Real resistance to that requires changes at the
-  browser-engine level (this is why Brave/Tor Browser exist as forks rather
-  than extensions). Treat this as raising the cost of fingerprinting, not
-  eliminating it.
-- **The Chrome install prompt will say "Read and change all your data on
-  all websites."** That's `<all_urls>` host permission, which any extension
-  that blocks network requests and hides ads sitewide genuinely needs — the
-  same permission uBlock Origin and every other real adblocker requests.
-  There's no way to block ads without it.
-
-## Security
-
-See [SECURITY.md](SECURITY.md) for what's already hardened and how to
-report a security issue.
-
-## License & attribution
-
-Ghost Block's own code (everything under `src/`, `build/`, `manifest.json`)
-is licensed under [GPL-3.0](LICENSE).
-
-The compiled rules in `rules/` are derived from third-party filter lists,
-which keep their own licenses regardless of the format they're compiled
-into here:
-
-- `rules/ads.dnr.json`, `rules/privacy.dnr.json`, and the bulk of
-  `rules/cosmetic-*.json` are compiled from
-  [EasyList and EasyPrivacy](https://easylist.to/), © The EasyList authors,
-  dual-licensed
-  [GPLv3 / CC BY-SA 3.0](https://easylist.to/pages/licence.html).
-- `rules/annoyances.dnr.json` is compiled from
-  [anti-adblock-killer](https://github.com/reek/anti-adblock-killer),
-  © Reek, licensed
-  [CC BY-SA 4.0](https://creativecommons.org/licenses/by-sa/4.0/).
-
-## Contributing
-
-Issues and PRs welcome — false positives/negatives in blocking, sites the
-anti-adblock-wall defeat doesn't cover, or heuristic tuning for the
-ad-learning scanner are all useful reports even without a code fix attached.
+See [SECURITY.md](SECURITY.md) for how to report a security issue.
