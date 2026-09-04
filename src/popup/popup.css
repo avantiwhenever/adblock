@@ -109,6 +109,39 @@ input:checked + .slider::before { transform: translateX(14px); }
 .site-toggle-btn:hover { background: var(--card); }
 .site-toggle-btn.paused { color: var(--accent); border-color: var(--accent); }
 
+/* Every currently-paused site (see popup.js's renderWhitelist) — not just
+   the current tab's, which .site-row above already covers. */
+.whitelist {
+  margin-bottom: 12px;
+  padding-bottom: 10px;
+  border-bottom: 1px solid var(--border);
+}
+.whitelist-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 5px 0;
+}
+.whitelist-host {
+  font-size: 12px;
+  word-break: break-all;
+  overflow: hidden;
+}
+.whitelist-row button {
+  border: 1px solid var(--border);
+  background: transparent;
+  color: var(--fg);
+  border-radius: 6px;
+  width: 24px;
+  height: 24px;
+  cursor: pointer;
+  font-size: 12px;
+  line-height: 1;
+  flex-shrink: 0;
+}
+.whitelist-row button:hover { border-color: #ff3b30; color: #ff3b30; }
+
 .protections-title { font-size: 11px; color: var(--muted); text-transform: uppercase; letter-spacing: 0.03em; margin-bottom: 6px; }
 .protection-row {
   display: flex;

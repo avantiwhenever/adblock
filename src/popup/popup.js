@@ -50,6 +50,8 @@ const els = {
   protoLearn: document.getElementById("proto-learn"),
   candidatesSection: document.getElementById("candidates-section"),
   candidatesList: document.getElementById("candidates-list"),
+  whitelistSection: document.getElementById("whitelist-section"),
+  whitelistList: document.getElementById("whitelist-list"),
 };
 
 // The tab the popup was opened for, and its hostname — both resolved once
@@ -97,11 +99,61 @@ function render(settings) {
 }
 
 // Convenience wrapper: re-read settings from storage and re-render
-// everything (toggles + the review queue) — called on init and whenever
-// storage changes.
+// everything (toggles + the paused-sites list + the review queue) —
+// called on init and whenever storage changes.
 async function refresh() {
-  render(await getSettings());
+  const settings = await getSettings();
+  render(settings);
+  renderWhitelist(settings.whitelist);
   await renderCandidates();
+}
+
+// Builds one row of the "Paused sites" list: the hostname plus a single
+// "×" button that resumes protection there. Unlike the current-tab
+// Pause/Resume button, this can remove a site you're not currently
+// visiting — there's no tab to reload, so protection simply resumes the
+// next time that site is loaded.
+function whitelistRow(hostname) {
+  const row = document.createElement("div");
+  row.className = "whitelist-row";
+
+  const host = document.createElement("div");
+  host.className = "whitelist-host";
+  host.textContent = hostname;
+
+  const removeBtn = document.createElement("button");
+  removeBtn.title = "Resume protection on this site";
+  removeBtn.textContent = "✕";
+  removeBtn.addEventListener("click", () => removeFromWhitelist(hostname).catch(() => {}));
+
+  row.append(host, removeBtn);
+  return row;
+}
+
+// Renders the full "Paused sites" list from the whitelist array already
+// fetched by refresh() — no separate storage read needed, unlike
+// renderCandidates (which is called from places that don't already have
+// settings in hand).
+function renderWhitelist(whitelist) {
+  els.whitelistList.replaceChildren();
+  els.whitelistSection.hidden = whitelist.length === 0;
+  for (const hostname of whitelist) {
+    els.whitelistList.appendChild(whitelistRow(hostname));
+  }
+}
+
+// Removes one hostname from the whitelist, regardless of whether it's the
+// current tab's site — pauseOrResumeSite (below) handles the current-tab
+// case and also reloads that tab; this one only updates storage, since a
+// paused site you're not currently viewing has no tab to reload.
+async function removeFromWhitelist(hostname) {
+  const settings = await getSettings();
+  const whitelist = settings.whitelist.filter((h) => h !== hostname);
+  await chrome.storage.local.set({ whitelist });
+  // Immediate feedback rather than waiting for the storage.onChanged
+  // round-trip — matches pauseOrResumeSite's pattern below.
+  render({ ...settings, whitelist });
+  renderWhitelist(whitelist);
 }
 
 // The "blocked on this page" counter — reads the same per-tab count
@@ -221,6 +273,7 @@ async function pauseOrResumeSite() {
   // storage.onChanged round-trip, so the button's label/state flips the
   // instant you click it.
   render({ ...settings, whitelist });
+  renderWhitelist(whitelist);
   if (currentTab?.id !== undefined) chrome.tabs.reload(currentTab.id);
 }
 

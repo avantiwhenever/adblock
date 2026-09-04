@@ -42,6 +42,16 @@
     <button id="site-toggle" class="site-toggle-btn">Pause</button>
   </section>
 
+  <!-- Every site currently paused (chrome.storage.local's `whitelist`
+       array), not just the current tab's — lets you find and resume
+       protection on a site you paused a while ago without having to
+       revisit it first. Starts `hidden`; popup.js's renderWhitelist()
+       only reveals it once there's at least one paused site. -->
+  <section class="whitelist" id="whitelist-section" hidden>
+    <div class="protections-title">Paused sites</div>
+    <div id="whitelist-list"></div>
+  </section>
+
   <!-- One checkbox per independent protection layer — each writes straight
        to its own chrome.storage.local key on change (see popup.js), which
        background.js's storage.onChanged listener then turns into the
