@@ -37,6 +37,11 @@
       "js": ["src/content/cosmetic.js"],
       "run_at": "document_start",
       "all_frames": true
+    },
+    {
+      "matches": ["<all_urls>"],
+      "js": ["src/content/detect.js"],
+      "run_at": "document_idle"
     }
   ]
 }

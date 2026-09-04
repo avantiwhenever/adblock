@@ -3,8 +3,12 @@ const DEFAULT_SETTINGS = {
   blockingEnabled: true,
   annoyancesEnabled: true,
   fingerprintGuard: true,
+  learnCandidates: true,
   whitelist: [],
 };
+
+const MAX_DISMISSED = 500;
+const MAX_CANDIDATE_ROWS = 5;
 
 const els = {
   statusDot: document.getElementById("status-dot"),
@@ -15,6 +19,9 @@ const els = {
   protoBlocking: document.getElementById("proto-blocking"),
   protoAnnoyances: document.getElementById("proto-annoyances"),
   protoFingerprint: document.getElementById("proto-fingerprint"),
+  protoLearn: document.getElementById("proto-learn"),
+  candidatesSection: document.getElementById("candidates-section"),
+  candidatesList: document.getElementById("candidates-list"),
 };
 
 let currentTab = null;
@@ -31,19 +38,21 @@ function render(settings) {
   els.protoBlocking.checked = settings.blockingEnabled;
   els.protoAnnoyances.checked = settings.annoyancesEnabled;
   els.protoFingerprint.checked = settings.fingerprintGuard;
+  els.protoLearn.checked = settings.learnCandidates;
 
   const paused = currentHostname && settings.whitelist.includes(currentHostname);
   els.siteToggle.textContent = paused ? "Resume" : "Pause";
   els.siteToggle.classList.toggle("paused", paused);
 
   const disableFine = !settings.enabled;
-  for (const el of [els.protoBlocking, els.protoAnnoyances, els.protoFingerprint, els.siteToggle]) {
+  for (const el of [els.protoBlocking, els.protoAnnoyances, els.protoFingerprint, els.protoLearn, els.siteToggle]) {
     el.disabled = disableFine;
   }
 }
 
 async function refresh() {
   render(await getSettings());
+  await renderCandidates();
 }
 
 async function updateCount() {
@@ -51,6 +60,70 @@ async function updateCount() {
   const key = `count_${currentTab.id}`;
   const { [key]: count = 0 } = await chrome.storage.session.get(key);
   els.count.textContent = String(count);
+}
+
+function candidateRow(candidate) {
+  const row = document.createElement("div");
+  row.className = "candidate-row";
+
+  const info = document.createElement("div");
+  info.className = "candidate-domain";
+  info.textContent = candidate.domain;
+  const seen = document.createElement("span");
+  seen.className = "seen";
+  seen.textContent = `seen on ${candidate.pageHost}${candidate.count > 1 ? ` · ${candidate.count}×` : ""}`;
+  info.appendChild(seen);
+
+  const actions = document.createElement("div");
+  actions.className = "candidate-actions";
+  const approveBtn = document.createElement("button");
+  approveBtn.className = "approve";
+  approveBtn.title = "Block this domain";
+  approveBtn.textContent = "✓";
+  approveBtn.addEventListener("click", () => approveCandidate(candidate));
+  const ignoreBtn = document.createElement("button");
+  ignoreBtn.className = "ignore";
+  ignoreBtn.title = "Not an ad, ignore";
+  ignoreBtn.textContent = "✕";
+  ignoreBtn.addEventListener("click", () => ignoreCandidate(candidate.domain));
+  actions.append(approveBtn, ignoreBtn);
+
+  row.append(info, actions);
+  return row;
+}
+
+async function renderCandidates() {
+  const { candidates = [] } = await chrome.storage.local.get("candidates");
+  els.candidatesList.replaceChildren();
+  els.candidatesSection.hidden = candidates.length === 0;
+  if (candidates.length === 0) return;
+
+  for (const candidate of candidates.slice(0, MAX_CANDIDATE_ROWS)) {
+    els.candidatesList.appendChild(candidateRow(candidate));
+  }
+  if (candidates.length > MAX_CANDIDATE_ROWS) {
+    const more = document.createElement("div");
+    more.className = "candidates-more";
+    more.textContent = `+${candidates.length - MAX_CANDIDATE_ROWS} more`;
+    els.candidatesList.appendChild(more);
+  }
+}
+
+async function approveCandidate(candidate) {
+  const { candidates = [], approved = [] } = await chrome.storage.local.get(["candidates", "approved"]);
+  await chrome.storage.local.set({
+    candidates: candidates.filter((c) => c.domain !== candidate.domain),
+    approved: [...approved, { domain: candidate.domain, selector: candidate.selector || null, approvedAt: Date.now() }],
+  });
+}
+
+async function ignoreCandidate(domain) {
+  const { candidates = [], dismissed = [] } = await chrome.storage.local.get(["candidates", "dismissed"]);
+  const nextDismissed = [...new Set([...dismissed, domain])].slice(-MAX_DISMISSED);
+  await chrome.storage.local.set({
+    candidates: candidates.filter((c) => c.domain !== domain),
+    dismissed: nextDismissed,
+  });
 }
 
 async function init() {
@@ -79,6 +152,9 @@ async function init() {
   });
   els.protoFingerprint.addEventListener("change", () => {
     chrome.storage.local.set({ fingerprintGuard: els.protoFingerprint.checked });
+  });
+  els.protoLearn.addEventListener("change", () => {
+    chrome.storage.local.set({ learnCandidates: els.protoLearn.checked });
   });
 
   els.siteToggle.addEventListener("click", async () => {

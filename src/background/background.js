@@ -13,8 +13,17 @@ const DEFAULT_SETTINGS = {
   blockingEnabled: true,
   annoyancesEnabled: true,
   fingerprintGuard: true,
+  learnCandidates: true,
   whitelist: [],
+  approved: [],
 };
+
+const MAX_CANDIDATES = 100;
+// Dynamic rule id ranges: whitelist allow-rules and learned block-rules share
+// declarativeNetRequest's one dynamic-rule id space, so they get disjoint
+// bands rather than both starting at 1.
+const WHITELIST_ID_BASE = 1;
+const APPROVED_ID_BASE = 100000;
 
 async function getSettings() {
   const stored = await chrome.storage.local.get(Object.keys(DEFAULT_SETTINGS));
@@ -34,12 +43,13 @@ async function syncRulesets() {
   await chrome.declarativeNetRequest.updateEnabledRulesets({ enableRulesetIds, disableRulesetIds });
 }
 
-async function syncWhitelistDynamicRules() {
-  const { whitelist } = await getSettings();
+async function syncDynamicRules() {
+  const { whitelist, approved } = await getSettings();
   const existing = await chrome.declarativeNetRequest.getDynamicRules();
   const removeRuleIds = existing.map((r) => r.id);
-  const addRules = whitelist.map((hostname, i) => ({
-    id: i + 1,
+
+  const allowRules = whitelist.map((hostname, i) => ({
+    id: WHITELIST_ID_BASE + i,
     priority: 10000, // comfortably above any static rule's priority (max 2)
     action: { type: "allow" },
     condition: {
@@ -50,7 +60,17 @@ async function syncWhitelistDynamicRules() {
       ],
     },
   }));
-  await chrome.declarativeNetRequest.updateDynamicRules({ removeRuleIds, addRules });
+
+  // Personal, locally-learned blocks (see handleCandidate below) — approved
+  // by you from the popup's review queue, never applied automatically.
+  const blockRules = approved.map((entry, i) => ({
+    id: APPROVED_ID_BASE + i,
+    priority: 1,
+    action: { type: "block" },
+    condition: { urlFilter: `||${entry.domain}^` },
+  }));
+
+  await chrome.declarativeNetRequest.updateDynamicRules({ removeRuleIds, addRules: [...allowRules, ...blockRules] });
 }
 
 // The fingerprint guard runs in the page's own JS world (MAIN), which means
@@ -86,7 +106,7 @@ async function syncGuardScript() {
 }
 
 async function applyAll() {
-  await Promise.all([syncRulesets(), syncWhitelistDynamicRules(), syncGuardScript()]);
+  await Promise.all([syncRulesets(), syncDynamicRules(), syncGuardScript()]);
 }
 
 chrome.runtime.onInstalled.addListener(() => {
@@ -97,7 +117,7 @@ chrome.runtime.onStartup.addListener(applyAll);
 
 chrome.storage.onChanged.addListener((changes, area) => {
   if (area !== "local") return;
-  const keys = ["enabled", "blockingEnabled", "annoyancesEnabled", "fingerprintGuard", "whitelist"];
+  const keys = ["enabled", "blockingEnabled", "annoyancesEnabled", "fingerprintGuard", "whitelist", "approved"];
   if (keys.some((k) => k in changes)) applyAll();
 });
 
@@ -110,6 +130,9 @@ async function reinjectIntoOpenTabs() {
     if (tab.id === undefined) continue;
     chrome.scripting
       .executeScript({ target: { tabId: tab.id, allFrames: true }, files: ["src/content/cosmetic.js"] })
+      .catch(() => {});
+    chrome.scripting
+      .executeScript({ target: { tabId: tab.id }, files: ["src/content/detect.js"] })
       .catch(() => {});
   }
 }
@@ -180,3 +203,44 @@ chrome.webRequest.onBeforeRequest.addListener(
 chrome.tabs.onRemoved.addListener((tabId) => {
   chrome.storage.session.remove(`count_${tabId}`);
 });
+
+// ---- Local ad-learning review queue ----
+//
+// detect.js (per-page, heuristic) reports candidate third-party domains it
+// suspects are ads. Nothing here blocks automatically: a candidate only
+// becomes an active block rule once you approve it from the popup (see
+// syncDynamicRules's blockRules). Everything stays in chrome.storage.local —
+// nothing is sent anywhere.
+async function handleCandidate({ domain, selector, pageHost }) {
+  if (!domain) return;
+  const domainSet = await getBlockedDomainSet();
+  if (isBlockedHostname(domain, domainSet)) return; // static lists already cover it
+
+  const { candidates = [], approved = [], dismissed = [] } = await chrome.storage.local.get([
+    "candidates",
+    "approved",
+    "dismissed",
+  ]);
+  if (dismissed.includes(domain) || approved.some((a) => a.domain === domain)) return;
+
+  const idx = candidates.findIndex((c) => c.domain === domain);
+  if (idx !== -1) {
+    candidates[idx].count = (candidates[idx].count || 1) + 1;
+    candidates[idx].lastSeen = Date.now();
+    if (selector && !candidates[idx].selector) candidates[idx].selector = selector;
+  } else {
+    candidates.unshift({ domain, selector: selector || null, pageHost, firstSeen: Date.now(), lastSeen: Date.now(), count: 1 });
+    if (candidates.length > MAX_CANDIDATES) candidates.length = MAX_CANDIDATES;
+  }
+  await chrome.storage.local.set({ candidates });
+}
+
+chrome.runtime.onMessage.addListener((message) => {
+  if (message?.type === "candidate-found") handleCandidate(message).catch(() => {});
+});
+
+// Exposed for the popup: approving/dismissing candidates is settings-shaped
+// (goes through storage + triggers applyAll via the onChanged listener
+// above), so the popup writes directly to chrome.storage.local rather than
+// round-tripping through messages here.
+

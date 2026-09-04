@@ -107,6 +107,40 @@ input:checked + .slider::before { transform: translateX(14px); }
   cursor: pointer;
 }
 
+.candidates {
+  margin-top: 12px;
+  padding-top: 10px;
+  border-top: 1px solid var(--border);
+}
+.candidate-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 6px 0;
+}
+.candidate-domain {
+  font-size: 12px;
+  word-break: break-all;
+  overflow: hidden;
+}
+.candidate-domain .seen { display: block; font-size: 10px; color: var(--muted); }
+.candidate-actions { display: flex; gap: 4px; flex-shrink: 0; }
+.candidate-actions button {
+  border: 1px solid var(--border);
+  background: transparent;
+  color: var(--fg);
+  border-radius: 6px;
+  width: 24px;
+  height: 24px;
+  cursor: pointer;
+  font-size: 12px;
+  line-height: 1;
+}
+.candidate-actions .approve:hover { border-color: #34c759; color: #34c759; }
+.candidate-actions .ignore:hover { border-color: #ff3b30; color: #ff3b30; }
+.candidates-more { font-size: 11px; color: var(--muted); text-align: center; padding-top: 4px; }
+
 footer {
   margin-top: 14px;
   padding-top: 10px;
