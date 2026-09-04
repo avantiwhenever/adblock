@@ -31,7 +31,8 @@
     "rule_resources": [
       { "id": "ads", "enabled": true, "path": "rules/ads.dnr.json" },
       { "id": "privacy", "enabled": true, "path": "rules/privacy.dnr.json" },
-      { "id": "annoyances", "enabled": true, "path": "rules/annoyances.dnr.json" }
+      { "id": "annoyances", "enabled": true, "path": "rules/annoyances.dnr.json" },
+      { "id": "consent", "enabled": true, "path": "rules/consent.dnr.json" }
     ]
   },
   "content_scripts": [

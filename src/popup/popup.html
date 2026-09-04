@@ -6,6 +6,10 @@
   <link rel="stylesheet" href="popup.css" />
 </head>
 <body>
+  <!-- Brand row: status dot (green = protection active somewhere, grey =
+       master switch off) + the one global on/off switch. All the finer-
+       grained controls below only matter when this is checked — see
+       popup.js's render(), which disables them when it's unchecked. -->
   <header>
     <div class="brand">
       <span class="dot" id="status-dot"></span>
@@ -17,11 +21,19 @@
     </label>
   </header>
 
+  <!-- Approximate blocked-request count for the current tab. Filled in by
+       popup.js's updateCount() from chrome.storage.session — see
+       background.js's badge-counting section for why this is an
+       approximation rather than an exact count. -->
   <section class="count-card">
     <div class="count" id="count">0</div>
     <div class="count-label">requests blocked on this page<br /><span class="muted">(approximate)</span></div>
   </section>
 
+  <!-- The per-site pause control. "This site" always refers to the exact
+       hostname of the tab the popup was opened for (see popup.js's init).
+       Button text/state (Pause vs. Resume) is set by render() based on
+       whether that hostname is currently in the whitelist. -->
   <section class="site-row">
     <div class="site-info">
       <div class="site-label">This site</div>
@@ -30,6 +42,10 @@
     <button id="site-toggle" class="site-toggle-btn">Pause</button>
   </section>
 
+  <!-- One checkbox per independent protection layer — each writes straight
+       to its own chrome.storage.local key on change (see popup.js), which
+       background.js's storage.onChanged listener then turns into the
+       actual declarativeNetRequest/scripting configuration. -->
   <section class="protections">
     <div class="protections-title">Active protections</div>
     <label class="protection-row">
@@ -41,6 +57,10 @@
       <input type="checkbox" id="proto-annoyances" />
     </label>
     <label class="protection-row">
+      <span>Cookie banner blocking</span>
+      <input type="checkbox" id="proto-consent" />
+    </label>
+    <label class="protection-row">
       <span>Fingerprint hardening</span>
       <input type="checkbox" id="proto-fingerprint" />
     </label>
@@ -50,6 +70,10 @@
     </label>
   </section>
 
+  <!-- The ad-learning review queue (see src/content/detect.js and
+       background.js's handleCandidate). Starts `hidden` — popup.js's
+       renderCandidates() only reveals it once there's at least one
+       candidate to show, so an empty queue doesn't clutter the popup. -->
   <section class="candidates" id="candidates-section" hidden>
     <div class="protections-title">New ads found on this device</div>
     <div id="candidates-list"></div>
@@ -57,6 +81,9 @@
 
   <footer>No usage data is collected or sent anywhere by this extension.</footer>
 
+  <!-- No inline scripts/handlers anywhere in this file on purpose — keeps
+       this page compliant with Manifest V3's default extension-pages CSP
+       (script-src 'self') without needing any exceptions. -->
   <script src="popup.js"></script>
 </body>
 </html>

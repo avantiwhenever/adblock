@@ -249,7 +249,7 @@ const PRIORITY_DOMAINS = [
   "amazon-adsystem.com", "assoc-amazon.com",
   // Major SSPs / DSPs / ad exchanges
   "adnxs.com", "rubiconproject.com", "pubmatic.com", "openx.net",
-  "casalemedia.com", "criteo.com", "criteo.net", "adsrvr.org",
+  "casalemedia.com", "criteo.com", "criteo.net", "adsrvr.org", "thetradedesk.com",
   "contextweb.com", "indexexchange.com", "smartadserver.com",
   "yieldmo.com", "sharethrough.com", "sovrn.com", "media.net",
   "advertising.com", "adform.net", "bidswitch.net", "gumgum.com",
@@ -274,24 +274,103 @@ function isPriority(pattern) {
   return PRIORITY_DOMAINS.some((p) => domain === p || domain.endsWith(`.${p}`));
 }
 
+// ----------------------------------------------------------------------------
+// Hand-curated, evidence-based extras
+// ----------------------------------------------------------------------------
+// EasyList/EasyPrivacy are crowd-maintained and generally excellent, but
+// they can't keep up with an ad vendor that deliberately rotates domains
+// per campaign specifically to defeat domain-based blocklists — by the
+// time such a domain gets added to a public list, the vendor has already
+// moved to a new one. The entries below were added after a live report
+// (see git history / README) of Yahoo.com serving both a display ad and a
+// Taboola native-ad unit through "*.athwartwhoafat.com" — a
+// randomly-generated-looking domain that's certain to rotate again. Rather
+// than chase the domain, these target things that *don't* rotate: a
+// stable token embedded in the URL path, and a standard accessibility
+// label the ad-serving SafeFrame sets regardless of which domain hosts it.
+//
+// These are static observations from one investigation, not a general
+// solution to domain-rotation evasion — if the same technique resurfaces
+// with a different path token, it'll need a fresh rule the same way this
+// one was found: from a live report with the actual markup.
+const CUSTOM_NETWORK_RULES = [
+  {
+    // No "||" domain anchor on purpose — this matches the URL's *path*
+    // wherever it's hosted, which is the whole point: it doesn't matter
+    // which random domain the creative is served from this week.
+    urlFilter: "*/player/*ybfqz9i9iul9ru3ss*",
+  },
+];
+
+const CUSTOM_COSMETIC_GENERIC = [
+  // Google Ad Manager SafeFrame creatives set this accessibility label by
+  // convention — hides the ad regardless of which domain served it,
+  // including via the domain-rotation trick above.
+  'iframe[aria-label="Advertisement"]',
+  // Taboola's ad-blocking-recovery product labels its native-ad branding
+  // this way regardless of which publisher's site it's embedded in. This
+  // only reaches the inner label span, not its wrapper — see
+  // CUSTOM_COSMETIC_SPECIFIC below for the yahoo.com-scoped wrapper rule;
+  // kept generic here too since the label text itself is distinctive
+  // enough to be safe on any site.
+  '[aria-label*="in Taboola advertising section"]',
+];
+
+// Same idea as CUSTOM_COSMETIC_GENERIC, but for selectors only safe to
+// apply on specific domains — "branding"/"composite-branding" are common
+// enough class names that hiding them site-wide could plausibly catch
+// something that isn't an ad on some other site, so this one is scoped to
+// where it was actually observed.
+const CUSTOM_COSMETIC_SPECIFIC = {
+  "yahoo.com": [".branding.composite-branding"],
+};
+
 // Parses one "##selector" or "domain1,domain2##selector" cosmetic
-// (element-hiding) filter line into { domains, selector }, or null if the
-// line isn't a hideable, plain-CSS selector this converter can use.
-// `domains` is empty for a generic rule (applies everywhere) — see
-// processList below for how generic vs. per-domain selectors get sorted
-// into cosmetic-generic.json vs. cosmetic-specific.json.
+// Matches any of EasyList/uBlock Origin's cosmetic-rule marker forms
+// wherever they appear in a line: "##"/"#@#" (plain hide / unhide
+// exception), "#?#"/"#@?#" (extended/procedural hide, e.g. uBO's
+// :has-text()), "#$#"/"#@$#" (arbitrary CSS injection), "#%#"/"#@%#"
+// (scriptlet/JS injection). All eight share the shape
+// "#" + optional "@" + optional one of "$%?" + "#".
+//
+// This has to be checked in *addition* to (and before) treating a line as
+// a network filter — the earlier version of this file only recognized
+// "##" and "#@#", so lines using the other six marker forms fell through
+// undetected and got misparsed as network urlFilter patterns instead,
+// producing DNR rules Chrome's validator correctly rejected (e.g. a
+// "urlFilter" containing raw non-ASCII text from an uBO :has-text()
+// selector, which isn't valid in that field at all).
+const COSMETIC_MARKER_RE = /#@?[$%?]?#/;
+
+// Parses one cosmetic (element-hiding-family) filter line into
+// { domains, selector }, or null if it isn't a hideable, plain-CSS
+// selector this converter can use. `domains` is empty for a generic rule
+// (applies everywhere) — see processList below for how generic vs.
+// per-domain selectors get sorted into cosmetic-generic.json vs.
+// cosmetic-specific.json.
+//
+// Only the plain "##" marker (unconditional element hiding) is actually
+// supported. Everything else recognized by COSMETIC_MARKER_RE — unhide
+// exceptions, extended/procedural selectors, CSS injection, scriptlet/JS
+// injection — is deliberately unsupported and returns null: unhide
+// exceptions are a documented limitation (see README), extended selectors
+// use non-standard pseudo-classes plain CSS can't express, CSS injection
+// isn't a simple hide, and scriptlet injection would mean executing
+// arbitrary third-party JavaScript — never something to do sight-unseen
+// from a public list.
 function parseCosmeticLine(line) {
-  const idx = line.indexOf("#@#");
-  if (idx !== -1) return null; // per-site unhide exception — not applied (documented limitation)
+  const match = COSMETIC_MARKER_RE.exec(line);
+  if (!match || match[0] !== "##") return null;
 
-  const hideIdx = line.indexOf("##");
-  if (hideIdx === -1) return null;
-
-  const domainsPart = line.slice(0, hideIdx);
-  const selector = line.slice(hideIdx + 2).trim();
+  const idx = match.index;
+  const domainsPart = line.slice(0, idx);
+  const selector = line.slice(idx + match[0].length).trim();
   if (!selector) return null;
-  // Skip scriptlet injections and ABP/uBO extended (non-CSS) pseudo-selectors.
-  if (selector.startsWith("+js(") || selector.includes(":-abp-") || selector.includes(":matches-css") || selector.includes(":xpath(") || selector.includes(":upward(")) {
+  // Belt-and-suspenders: even a plain "##" line's selector text can still
+  // itself contain scriptlet/extended syntax on some list variants (rare,
+  // but seen in the wild) — reject those rather than trust the marker
+  // alone.
+  if (selector.startsWith("+js(") || selector.includes(":-abp-") || selector.includes(":matches-css") || selector.includes(":xpath(") || selector.includes(":upward(") || selector.includes(":has-text(")) {
     return null;
   }
 
@@ -307,12 +386,47 @@ function parseCosmeticLine(line) {
 // a machine that doesn't have build/cache/ populated yet (a first checkout
 // of this repo, or after `rm -rf build/cache`). Filenames here must match
 // what main()'s processList() calls expect.
+const EASYLIST_COOKIE_BASE = "https://raw.githubusercontent.com/easylist/easylist/master/easylist_cookie";
+
 const SOURCES = {
   "easylist.txt": "https://easylist.to/easylist/easylist.txt",
   "easyprivacy.txt": "https://easylist.to/easylist/easyprivacy.txt",
   "anti-adblock-killer.txt":
     "https://raw.githubusercontent.com/reek/anti-adblock-killer/master/anti-adblock-killer-filters.txt",
+  // EasyList's dedicated cookie/consent-banner list, split across several
+  // files upstream (general vs. per-site vs. international vs. the
+  // third-party consent-management-platform scripts that render most of
+  // these banners in the first place). COOKIE_FILES below is the set we
+  // actually use — see that constant for which pieces are included/why.
+  "cookie-general-block.txt": `${EASYLIST_COOKIE_BASE}/easylist_cookie_general_block.txt`,
+  "cookie-general-hide.txt": `${EASYLIST_COOKIE_BASE}/easylist_cookie_general_hide.txt`,
+  "cookie-specific-block.txt": `${EASYLIST_COOKIE_BASE}/easylist_cookie_specific_block.txt`,
+  "cookie-specific-hide.txt": `${EASYLIST_COOKIE_BASE}/easylist_cookie_specific_hide.txt`,
+  "cookie-intl-block.txt": `${EASYLIST_COOKIE_BASE}/easylist_cookie_international_specific_block.txt`,
+  "cookie-intl-hide.txt": `${EASYLIST_COOKIE_BASE}/easylist_cookie_international_specific_hide.txt`,
+  "cookie-thirdparty.txt": `${EASYLIST_COOKIE_BASE}/easylist_cookie_thirdparty.txt`,
+  "cookie-allowlist.txt": `${EASYLIST_COOKIE_BASE}/easylist_cookie_allowlist.txt`,
 };
+
+// The cookie-consent-banner category is spread across 8 upstream files
+// rather than EasyList/EasyPrivacy's one-file-each — processList() below
+// accepts an array here and concatenates them before parsing, same as if
+// they were one file. Deliberately excludes
+// easylist_cookie_allowlist_general_hide.txt (cosmetic *unhide* exceptions
+// — already a documented limitation that #@# lines aren't applied, same as
+// for the other lists) and the ABP/uBO-specific variant files (mostly
+// scriptlet injections, which parseCosmeticLine already skips wherever
+// they'd appear, so fetching those extra files would add little).
+const COOKIE_FILES = [
+  "cookie-general-block.txt",
+  "cookie-general-hide.txt",
+  "cookie-specific-block.txt",
+  "cookie-specific-hide.txt",
+  "cookie-intl-block.txt",
+  "cookie-intl-hide.txt",
+  "cookie-thirdparty.txt",
+  "cookie-allowlist.txt",
+];
 
 // Downloads `file` into build/cache/ if it isn't already there. Doesn't
 // re-download an existing cached copy — if you want fresher upstream data,
@@ -335,10 +449,20 @@ async function downloadIfMissing(file) {
   await writeFile(dest, await res.text());
 }
 
-async function loadList(file) {
-  await downloadIfMissing(file);
-  const text = await readFile(path.join(CACHE, file), "utf8");
-  return text.split("\n").map((l) => l.trim());
+// Accepts either one filename or an array of them (see COOKIE_FILES above
+// for why a category might span multiple upstream files) and returns every
+// line from all of them concatenated into one flat array, as if they were
+// a single file — parseNetworkLine/parseCosmeticLine below don't care
+// which original file a line came from.
+async function loadList(files) {
+  const list = Array.isArray(files) ? files : [files];
+  const allLines = [];
+  for (const file of list) {
+    await downloadIfMissing(file);
+    const text = await readFile(path.join(CACHE, file), "utf8");
+    allLines.push(...text.split("\n").map((l) => l.trim()));
+  }
+  return allLines;
 }
 
 // Parses one whole filter list file end-to-end: separates cosmetic rules
@@ -347,8 +471,8 @@ async function loadList(file) {
 // main() needs to write out (DNR rules for this file, this file's
 // contribution to the two cosmetic-selector maps, and the domains it
 // actually ended up blocking after truncation).
-async function processList(file, { networkCap }) {
-  const lines = await loadList(file);
+async function processList(files, { networkCap }) {
+  const lines = await loadList(files);
   const badfilters = new Set();
   const networkCandidates = [];
   const cosmeticGeneric = new Set();
@@ -366,7 +490,7 @@ async function processList(file, { networkCap }) {
   // rule it's meant to cancel.
   for (const line of lines) {
     if (!line || line.startsWith("!") || line.startsWith("[")) continue;
-    if (line.includes("#@#") || line.includes("##")) continue;
+    if (COSMETIC_MARKER_RE.test(line)) continue;
     if (line.includes("$badfilter")) {
       const withoutFilter = line.replace(/@@/, "");
       const dollarIdx = withoutFilter.indexOf("$");
@@ -378,7 +502,7 @@ async function processList(file, { networkCap }) {
   for (const line of lines) {
     if (!line || line.startsWith("!") || line.startsWith("[")) continue;
 
-    if (line.includes("##") || line.includes("#@#")) {
+    if (COSMETIC_MARKER_RE.test(line)) {
       const cosmetic = parseCosmeticLine(line);
       if (!cosmetic) continue;
       if (cosmetic.domains.length === 0) {
@@ -427,6 +551,22 @@ async function processList(file, { networkCap }) {
 
   const dnrRules = capped.map((parsed, i) => buildDnrRule(i + 1, parsed));
 
+  // Safety net for exactly the bug class this file has already shipped
+  // once: a cosmetic-marker-family line (see COSMETIC_MARKER_RE) getting
+  // missed by the dispatch check above and misparsed as a network pattern
+  // instead. If that ever happens again — a new marker variant, a parsing
+  // edge case — fail the build loudly here rather than only finding out
+  // when Chrome's manifest loader rejects the whole ruleset at install
+  // time. (This checks the *shape* COSMETIC_MARKER_RE matches, not merely
+  // "contains a #" — a lone "#" can legitimately appear in an ordinary URL
+  // pattern and isn't itself a sign of anything wrong.)
+  const stillCosmetic = dnrRules.filter((r) => r.condition.urlFilter && COSMETIC_MARKER_RE.test(r.condition.urlFilter));
+  if (stillCosmetic.length > 0) {
+    throw new Error(
+      `${stillCosmetic.length} generated rule(s) still look like cosmetic syntax, e.g.: ${stillCosmetic[0].condition.urlFilter}`
+    );
+  }
+
   return { dnrRules, cosmeticGeneric, cosmeticSpecific, blockedDomains, droppedNetwork: networkCandidates.length - capped.length };
 }
 
@@ -449,39 +589,68 @@ function mergeSpecific(target, source) {
   }
 }
 
-// Entry point: processes all three source lists (in parallel — they're
+// Entry point: processes all four source categories (in parallel — they're
 // entirely independent of each other), writes every file under rules/, and
-// prints a summary of what was kept/dropped. The per-list network caps
-// here (16000/10000/2000, totalling 28000) are chosen to stay safely under
-// Chrome's 30,000 guaranteed-static-rule-per-extension budget with some
-// headroom, while giving EasyList (general ads) the largest share since
-// it's the highest-traffic-impact category.
+// prints a summary of what was kept/dropped. The per-category network caps
+// here (16000/10000/2000/2000, totalling 30000) are chosen to stay exactly
+// at Chrome's 30,000 guaranteed-static-rule-per-extension budget, with
+// EasyList (general ads) getting the largest share since it's the
+// highest-traffic-impact category.
 async function main() {
   await mkdir(RULES_DIR, { recursive: true });
 
-  const [ads, privacy, annoyances] = await Promise.all([
+  const [ads, privacy, annoyances, consent] = await Promise.all([
     processList("easylist.txt", { networkCap: 16000 }),
     processList("easyprivacy.txt", { networkCap: 10000 }),
     processList("anti-adblock-killer.txt", { networkCap: 2000 }),
+    processList(COOKIE_FILES, { networkCap: 2000 }),
   ]);
+  const categories = [ads, privacy, annoyances, consent];
 
-  // Each source list's compiled network rules become their own DNR
+  // Append the hand-curated custom rules (see CUSTOM_NETWORK_RULES above)
+  // to the "ads" category, with fresh ids continuing on from wherever
+  // processList's capping left off — avoids any id collision with the
+  // EasyList-derived rules already in ads.dnrRules.
+  const nextId = ads.dnrRules.length + 1;
+  for (const [i, custom] of CUSTOM_NETWORK_RULES.entries()) {
+    ads.dnrRules.push({
+      id: nextId + i,
+      priority: 1,
+      action: { type: "block" },
+      condition: { urlFilter: custom.urlFilter },
+    });
+  }
+
+  // Each source category's compiled network rules become their own DNR
   // ruleset file, matching manifest.json's rule_resources entries
   // (id "ads" → ads.dnr.json, etc.) one-to-one.
   await writeFile(path.join(RULES_DIR, "ads.dnr.json"), JSON.stringify(ads.dnrRules));
   await writeFile(path.join(RULES_DIR, "privacy.dnr.json"), JSON.stringify(privacy.dnrRules));
   await writeFile(path.join(RULES_DIR, "annoyances.dnr.json"), JSON.stringify(annoyances.dnrRules));
+  await writeFile(path.join(RULES_DIR, "consent.dnr.json"), JSON.stringify(consent.dnrRules));
 
-  // Cosmetic selectors, by contrast, are pooled from all three source
-  // lists into two single combined files — cosmetic.js doesn't care which
+  // Cosmetic selectors, by contrast, are pooled from all four categories
+  // into two single combined files — cosmetic.js doesn't care which
   // original list a selector came from, only whether it's generic
-  // (applies everywhere) or scoped to specific domains.
+  // (applies everywhere) or scoped to specific domains. (This means cookie-
+  // banner cosmetic hiding rides along with the "Ad & tracker blocking"
+  // toggle rather than having its own — the "Cookie banner blocking"
+  // toggle controls the network-level rules only, i.e. whether the
+  // consent-management scripts that render most banners are blocked from
+  // loading at all. Splitting cosmetic selectors by category too would be
+  // a reasonable future improvement but adds real complexity for a
+  // secondary effect — the network blocking is what does most of the work.)
   const cosmeticGeneric = new Set();
   const cosmeticSpecific = new Map();
-  for (const src of [ads, privacy, annoyances]) {
+  for (const src of categories) {
     mergeCosmetic(cosmeticGeneric, src.cosmeticGeneric);
     mergeSpecific(cosmeticSpecific, src.cosmeticSpecific);
   }
+  mergeCosmetic(cosmeticGeneric, CUSTOM_COSMETIC_GENERIC);
+  mergeSpecific(
+    cosmeticSpecific,
+    new Map(Object.entries(CUSTOM_COSMETIC_SPECIFIC).map(([d, sels]) => [d, new Set(sels)]))
+  );
 
   await writeFile(
     path.join(RULES_DIR, "cosmetic-generic.json"),
@@ -501,18 +670,19 @@ async function main() {
   // file for why a flat domain list (rather than the full rule set) is
   // enough for that purpose.
   const blockedDomains = new Set();
-  for (const src of [ads, privacy, annoyances]) mergeCosmetic(blockedDomains, src.blockedDomains);
+  for (const src of categories) mergeCosmetic(blockedDomains, src.blockedDomains);
   await writeFile(path.join(RULES_DIR, "blocked-domains.json"), JSON.stringify([...blockedDomains]));
 
   console.log("ads:        %d rules kept, %d dropped (cap)", ads.dnrRules.length, ads.droppedNetwork);
   console.log("privacy:    %d rules kept, %d dropped (cap)", privacy.dnrRules.length, privacy.droppedNetwork);
   console.log("annoyances: %d rules kept, %d dropped (cap)", annoyances.dnrRules.length, annoyances.droppedNetwork);
+  console.log("consent:    %d rules kept, %d dropped (cap)", consent.dnrRules.length, consent.droppedNetwork);
   console.log("cosmetic generic selectors: %d", cosmeticGeneric.size);
   console.log("cosmetic domain-specific entries: %d", cosmeticSpecific.size);
   console.log("blocked-domain set (for badge counts): %d", blockedDomains.size);
   console.log(
     "total static DNR rules: %d (Chrome's guaranteed-safe budget is 30000)",
-    ads.dnrRules.length + privacy.dnrRules.length + annoyances.dnrRules.length
+    categories.reduce((sum, c) => sum + c.dnrRules.length, 0)
   );
 }
 

@@ -177,7 +177,11 @@
     const shadow = document.createElement("canvas");
     shadow.width = canvas.width;
     shadow.height = canvas.height;
-    const sctx = shadow.getContext("2d");
+    // willReadFrequently: true tells Chrome up front that this context
+    // will have its pixels read back (which we always do, via
+    // getImageData below) — without it, Chrome logs a console performance
+    // advisory suggesting exactly this, on every single shadow copy.
+    const sctx = shadow.getContext("2d", { willReadFrequently: true });
     sctx.drawImage(canvas, 0, 0);
     if (canvas.width > 0 && canvas.height > 0) {
       const imageData = sctx.getImageData(0, 0, canvas.width, canvas.height);

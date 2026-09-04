@@ -19,6 +19,7 @@ const DEFAULT_SETTINGS = {
   enabled: true,
   blockingEnabled: true,
   annoyancesEnabled: true,
+  consentEnabled: true,
   fingerprintGuard: true,
   learnCandidates: true,
   whitelist: [],
@@ -44,6 +45,7 @@ const els = {
   siteToggle: document.getElementById("site-toggle"),
   protoBlocking: document.getElementById("proto-blocking"),
   protoAnnoyances: document.getElementById("proto-annoyances"),
+  protoConsent: document.getElementById("proto-consent"),
   protoFingerprint: document.getElementById("proto-fingerprint"),
   protoLearn: document.getElementById("proto-learn"),
   candidatesSection: document.getElementById("candidates-section"),
@@ -72,6 +74,7 @@ function render(settings) {
   els.statusDot.classList.toggle("off", !settings.enabled);
   els.protoBlocking.checked = settings.blockingEnabled;
   els.protoAnnoyances.checked = settings.annoyancesEnabled;
+  els.protoConsent.checked = settings.consentEnabled;
   els.protoFingerprint.checked = settings.fingerprintGuard;
   els.protoLearn.checked = settings.learnCandidates;
 
@@ -88,7 +91,7 @@ function render(settings) {
   // in the UI to make that clear, rather than letting you flip a setting
   // that currently has no visible effect.
   const disableFine = !settings.enabled;
-  for (const el of [els.protoBlocking, els.protoAnnoyances, els.protoFingerprint, els.protoLearn, els.siteToggle]) {
+  for (const el of [els.protoBlocking, els.protoAnnoyances, els.protoConsent, els.protoFingerprint, els.protoLearn, els.siteToggle]) {
     el.disabled = disableFine;
   }
 }
@@ -235,6 +238,9 @@ async function init() {
   });
   els.protoAnnoyances.addEventListener("change", () => {
     chrome.storage.local.set({ annoyancesEnabled: els.protoAnnoyances.checked });
+  });
+  els.protoConsent.addEventListener("change", () => {
+    chrome.storage.local.set({ consentEnabled: els.protoConsent.checked });
   });
   els.protoFingerprint.addEventListener("change", () => {
     chrome.storage.local.set({ fingerprintGuard: els.protoFingerprint.checked });

@@ -4,7 +4,8 @@
 //
 // This is the "brain" of the extension. It doesn't block anything directly —
 // declarativeNetRequest (a browser-native API) does the actual network
-// blocking, and the content scripts (cosmetic.js, detect.js, guard.js) do
+// blocking, and the content scripts (cosmetic.js, detect.js, guard.js,
+// antidetect.js) do
 // the on-page work. This file's job is to:
 //
 //   1. Own the single source of truth for settings (chrome.storage.local).
@@ -22,17 +23,23 @@
 // surviving between calls except short-lived caches like
 // blockedDomainSetPromise below, which are cheap to rebuild on wake.
 
-// The three static rulesets declared in manifest.json's
+// The four static rulesets declared in manifest.json's
 // declarative_net_request.rule_resources. "ads"+"privacy" together are the
 // "Ad & tracker blocking" toggle in the popup; "annoyances" is the separate
-// "Anti-adblock-wall defeat" toggle.
+// "Anti-adblock-wall defeat" toggle; "consent" is "Cookie banner blocking"
+// (blocks the consent-management-platform scripts — Sourcepoint, OneTrust,
+// TrustArc, and similar — that render most cookie/tracking-consent
+// banners, so blocking the script itself usually prevents the banner from
+// ever appearing).
 const BLOCKING_RULESET_IDS = ["ads", "privacy"];
 const ANNOYANCE_RULESET_IDS = ["annoyances"];
+const CONSENT_RULESET_IDS = ["consent"];
 
-// The id we register the MAIN-world fingerprint-guard content script under
-// via chrome.scripting.registerContentScripts. Needs to be stable across
-// calls so we can look it up again later to update/unregister it.
+// Ids we register the two MAIN-world content scripts under via
+// chrome.scripting.registerContentScripts. Needs to be stable across calls
+// so we can look them up again later to update/unregister them.
 const GUARD_SCRIPT_ID = "ghostblock-guard";
+const ANTIDETECT_SCRIPT_ID = "ghostblock-antidetect";
 
 // Everything the popup can toggle, plus the data arrays the ad-learning
 // review queue and per-site pause feature read/write. getSettings() below
@@ -43,6 +50,7 @@ const DEFAULT_SETTINGS = {
   enabled: true, // master on/off switch, overrides every other toggle
   blockingEnabled: true, // EasyList/EasyPrivacy network + cosmetic rules
   annoyancesEnabled: true, // anti-adblock-killer rules
+  consentEnabled: true, // EasyList cookie-consent-banner rules
   fingerprintGuard: true, // canvas/WebGL/audio noise + hardware-info rounding
   learnCandidates: true, // whether detect.js scans pages for new ad candidates
   whitelist: [], // hostnames where you've hit "Pause" — all protection off there
@@ -85,17 +93,18 @@ function matchPatternsFor(hostname) {
 // ----------------------------------------------------------------------------
 // Static ruleset enable/disable
 // ----------------------------------------------------------------------------
-// The "Ad & tracker blocking" and "Anti-adblock-wall defeat" popup toggles
-// (plus the master switch) map directly onto declarativeNetRequest's
-// updateEnabledRulesets — Chrome does the actual enabling/disabling of the
-// pre-compiled rules in rules/*.dnr.json; we just tell it which of the
-// three named rulesets should currently be active.
+// The "Ad & tracker blocking", "Anti-adblock-wall defeat", and "Cookie
+// banner blocking" popup toggles (plus the master switch) map directly onto
+// declarativeNetRequest's updateEnabledRulesets — Chrome does the actual
+// enabling/disabling of the pre-compiled rules in rules/*.dnr.json; we just
+// tell it which of the four named rulesets should currently be active.
 async function syncRulesets() {
-  const { enabled, blockingEnabled, annoyancesEnabled } = await getSettings();
+  const { enabled, blockingEnabled, annoyancesEnabled, consentEnabled } = await getSettings();
   const enableRulesetIds = [];
   const disableRulesetIds = [];
   (enabled && blockingEnabled ? enableRulesetIds : disableRulesetIds).push(...BLOCKING_RULESET_IDS);
   (enabled && annoyancesEnabled ? enableRulesetIds : disableRulesetIds).push(...ANNOYANCE_RULESET_IDS);
+  (enabled && consentEnabled ? enableRulesetIds : disableRulesetIds).push(...CONSENT_RULESET_IDS);
   await chrome.declarativeNetRequest.updateEnabledRulesets({ enableRulesetIds, disableRulesetIds });
 }
 
@@ -158,38 +167,37 @@ async function syncDynamicRules() {
 // world untrusted page code runs in). So guard.js can't read
 // chrome.storage.local itself to check "am I supposed to run on this page".
 //
-// The fix: don't ask guard.js to decide. Decide here, in the one place that
-// *can* read settings, and control whether/where guard.js runs by
-// registering or unregistering it (and by listing whitelisted sites in
-// excludeMatches) rather than by giving it logic to skip itself.
-async function syncGuardScript() {
-  const { enabled, fingerprintGuard, whitelist } = await getSettings();
-  const existing = await chrome.scripting.getRegisteredContentScripts({ ids: [GUARD_SCRIPT_ID] });
+// The fix: don't ask guard.js (or antidetect.js, which needs the exact
+// same treatment for the exact same reason) to decide. Decide here, in the
+// one place that *can* read settings, and control whether/where each
+// script runs by registering or unregistering it (and by listing
+// whitelisted sites in excludeMatches) rather than by giving it logic to
+// skip itself.
+async function syncMainWorldScript(scriptId, file, shouldRun, whitelist) {
+  const existing = await chrome.scripting.getRegisteredContentScripts({ ids: [scriptId] });
 
-  if (!enabled || !fingerprintGuard) {
-    // Fingerprint hardening is off (globally, or via the master switch) —
-    // make sure the script isn't registered anywhere at all.
-    if (existing.length) await chrome.scripting.unregisterContentScripts({ ids: [GUARD_SCRIPT_ID] });
+  if (!shouldRun) {
+    if (existing.length) await chrome.scripting.unregisterContentScripts({ ids: [scriptId] });
     return;
   }
 
   const definition = {
-    id: GUARD_SCRIPT_ID,
-    js: ["src/content/guard.js"],
+    id: scriptId,
+    js: [file],
     matches: ["<all_urls>"],
     // Paused sites simply never get the script injected at all — cleaner
     // than injecting it everywhere and teaching it to no-op somehow.
     excludeMatches: whitelist.flatMap(matchPatternsFor),
     runAt: "document_start", // must patch natives before the page's own scripts run
     world: "MAIN",
-    allFrames: true, // ads/trackers often run their fingerprinting from an iframe
+    allFrames: true, // ads/trackers/detection probes often run from an iframe
     persistAcrossSessions: true, // survives service-worker restarts and browser relaunches
   };
 
   // registerContentScripts errors if a script with this id is already
   // registered, and updateContentScripts errors if it *isn't* — so which
-  // one we call depends on whether syncGuardScript has already run since
-  // this extension was loaded (or since the last time it was turned off).
+  // one we call depends on whether this has already run since the
+  // extension was loaded (or since the last time it was turned off).
   if (existing.length) {
     await chrome.scripting.updateContentScripts([definition]);
   } else {
@@ -197,13 +205,27 @@ async function syncGuardScript() {
   }
 }
 
+async function syncGuardScript() {
+  const { enabled, fingerprintGuard, whitelist } = await getSettings();
+  await syncMainWorldScript(GUARD_SCRIPT_ID, "src/content/guard.js", enabled && fingerprintGuard, whitelist);
+}
+
+// antidetect.js is gated by "Anti-adblock-wall defeat" (annoyancesEnabled),
+// not "Fingerprint hardening" — it's a different concern (defeating active
+// ad-blocker-detection probes, not fingerprint noise) that happens to need
+// the same MAIN-world registration mechanics as guard.js.
+async function syncAntidetectScript() {
+  const { enabled, annoyancesEnabled, whitelist } = await getSettings();
+  await syncMainWorldScript(ANTIDETECT_SCRIPT_ID, "src/content/antidetect.js", enabled && annoyancesEnabled, whitelist);
+}
+
 // The one function that actually needs to run whenever *any* setting
 // changes — re-derives every piece of runtime configuration (rulesets,
-// dynamic rules, guard script registration) from current settings. Cheap
-// enough to just always run all three rather than figuring out which
-// specific one a given settings change actually affects.
+// dynamic rules, both MAIN-world script registrations) from current
+// settings. Cheap enough to just always run all of them rather than
+// figuring out which specific one a given settings change actually affects.
 async function applyAll() {
-  await Promise.all([syncRulesets(), syncDynamicRules(), syncGuardScript()]);
+  await Promise.all([syncRulesets(), syncDynamicRules(), syncGuardScript(), syncAntidetectScript()]);
 }
 
 // Fires once when the extension is first installed, and again on every
@@ -225,7 +247,7 @@ chrome.runtime.onStartup.addListener(applyAll);
 // declarativeNetRequest / chrome.scripting.
 chrome.storage.onChanged.addListener((changes, area) => {
   if (area !== "local") return;
-  const keys = ["enabled", "blockingEnabled", "annoyancesEnabled", "fingerprintGuard", "whitelist", "approved"];
+  const keys = ["enabled", "blockingEnabled", "annoyancesEnabled", "consentEnabled", "fingerprintGuard", "whitelist", "approved"];
   if (keys.some((k) => k in changes)) applyAll();
 });
 

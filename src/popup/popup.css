@@ -1,3 +1,6 @@
+/* Light-theme tokens (default). `color-scheme: light dark` tells Chrome
+   this page supports both, so built-in form controls (checkboxes etc.)
+   pick a matching native style automatically. */
 :root {
   color-scheme: light dark;
   --bg: #ffffff;
@@ -8,6 +11,9 @@
   --border: #e4e4ec;
 }
 
+/* Dark-theme token overrides, applied automatically when the OS/Chrome is
+   in dark mode — every rule below reads only the --variables above, so
+   nothing past this block needs its own dark-mode variant. */
 @media (prefers-color-scheme: dark) {
   :root {
     --bg: #17171f;
@@ -48,6 +54,11 @@ header {
 }
 .dot.off { background: #999; }
 
+/* A checkbox styled to look like an iOS-style toggle switch: the real
+   <input type=checkbox> is made invisible (opacity: 0) but stays in the
+   DOM and clickable/keyboard-focusable, layered under the visible
+   .slider pill — a standard accessible way to build a custom toggle
+   without losing native checkbox semantics (screen readers, Tab/Space). */
 .switch { position: relative; display: inline-block; width: 34px; height: 20px; }
 .switch input { opacity: 0; width: 0; height: 0; }
 .slider {
@@ -107,6 +118,8 @@ input:checked + .slider::before { transform: translateX(14px); }
   cursor: pointer;
 }
 
+/* The ad-learning review queue (see src/content/detect.js,
+   background.js's handleCandidate, and popup.js's renderCandidates). */
 .candidates {
   margin-top: 12px;
   padding-top: 10px;

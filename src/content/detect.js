@@ -17,6 +17,16 @@
 // becomes an actual block rule. See README's "Local ad-learning" section
 // for the full explanation of that tradeoff.
 (async () => {
+  try {
+    await run();
+  } catch {
+    // See cosmetic.js for why this is swallowed rather than left as an
+    // uncaught rejection (most commonly: "Extension context invalidated"
+    // after reloading the extension while this tab was already open).
+  }
+})();
+
+async function run() {
   // Same settings pattern as cosmetic.js, plus the "learnCandidates" toggle
   // specific to this feature (the popup's "Learn new ads (beta)" checkbox).
   const { enabled = true, blockingEnabled = true, learnCandidates = true, whitelist = [] } =
@@ -181,4 +191,4 @@
     }, 500);
   });
   observer.observe(document.documentElement, { childList: true, subtree: true });
-})();
+}

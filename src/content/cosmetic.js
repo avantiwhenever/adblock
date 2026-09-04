@@ -17,6 +17,22 @@
 // something hides it too. That's what this file does, using the same
 // EasyList-style cosmetic (CSS) rules real ad blockers use for this.
 (async () => {
+  try {
+    await run();
+  } catch {
+    // Swallow anything unexpected (most commonly "Extension context
+    // invalidated" — this tab's content script was injected by a previous
+    // version of the extension, and chrome.runtime became unusable when
+    // the extension was reloaded from chrome://extensions while this tab
+    // stayed open; closing/reopening the tab fixes it). There's nothing
+    // useful this script can do about that itself, and letting the error
+    // surface as an uncaught rejection in the page's own console is both
+    // bad UX and a needless, visible trace of the extension's presence —
+    // exactly what this extension otherwise goes out of its way to avoid.
+  }
+})();
+
+async function run() {
   // Settings this script cares about:
   //   enabled/blockingEnabled — same master + "Ad & tracker blocking"
   //     toggles the background worker uses to decide whether to enable the
@@ -103,6 +119,19 @@
   }
   if (valid.length === 0) return;
 
+  // Some sites run active ad-blocker-detection probes that work by
+  // creating a hidden element, deliberately giving it a *generic* class
+  // name our own selectors above are supposed to catch (e.g. "ad",
+  // "adsbygoogle", "text-ad"), and checking whether it actually got
+  // hidden — i.e. our own correct behavior is the thing that trips their
+  // detector. NEVER_HIDE_SELECTORS is a short, evidence-based list of
+  // known bait-element ids used this way (currently just Yahoo's
+  // "#ad-unit" — see git history for the investigation); rather than
+  // weakening real ad-hiding to avoid the generic classes entirely, this
+  // protects the *specific* known bait elements from ever matching,
+  // regardless of what class they're wearing.
+  const NEVER_HIDE_SELECTORS = ["#ad-unit"];
+
   // Inject one combined CSS rule that hides everything matched. Deliberately
   // no id/class/data-* attribute on this <style> element: an unmarked tag
   // gives a page's own JavaScript nothing distinctive to search the DOM
@@ -111,6 +140,13 @@
   // than waiting for <head> to exist) works even before the page has
   // finished parsing its own <head>, since this runs at document_start.
   const style = document.createElement("style");
-  style.textContent = `${valid.join(",")}{display:none!important}`;
+  // The protect rule comes second and uses id-selector specificity, so it
+  // wins the cascade against the hide rule's class/attribute selectors
+  // even where both carry !important — but placing it after the hide rule
+  // in source order too means it'd still win in the (currently impossible,
+  // but safer not to depend on) case of an equally-specific hide selector.
+  style.textContent =
+    `${valid.join(",")}{display:none!important}` +
+    `${NEVER_HIDE_SELECTORS.join(",")}{display:revert!important;visibility:visible!important}`;
   (document.documentElement || document.head || document.body).appendChild(style);
-})();
+}
