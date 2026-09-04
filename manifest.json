@@ -24,6 +24,9 @@
   },
   "permissions": ["declarativeNetRequest", "storage", "webRequest", "scripting"],
   "host_permissions": ["<all_urls>"],
+  "content_security_policy": {
+    "extension_pages": "script-src 'self'; object-src 'self'"
+  },
   "declarative_net_request": {
     "rule_resources": [
       { "id": "ads", "enabled": true, "path": "rules/ads.dnr.json" },
